@@ -1,93 +1,153 @@
 import streamlit as st
+import yfinance as yf
 import datetime
 
-# Инициализация
-if 'transactions' not in st.session_state:
-    st.session_state.transactions = []
+st.set_page_config(page_title="SmartStockPay", page_icon="💸")
+st.title("SmartStockPay - Pay with Stocks 💸")
 
-if 'user_holdings' not in st.session_state:
-    st.session_state.user_holdings = {
-        "AAPL": 2.5,
-        "GOOGL": 1.8,
-        "TSLA": 3.0,
-        "AMZN": 4.2,
+# --- Инициализация портфеля пользователя (пример) ---
+if "portfolio" not in st.session_state:
+    st.session_state.portfolio = {
+        "AAPL": 10,      # количество акций Apple
+        "MSFT": 5,       # Microsoft
+        "TSLA": 8,       # Tesla
+        "AMZN": 3,       # Amazon
     }
 
-stock_prices = {
-    "AAPL": 180.00,
-    "GOOGL": 135.50,
-    "TSLA": 220.20,
-    "AMZN": 127.80,
-}
+if "transactions" not in st.session_state:
+    st.session_state.transactions = []
 
-st.set_page_config(page_title="SmartStockPay", page_icon="💸")
-st.title("SmartStockPay 💸")
-st.markdown("## Use your stocks to pay instantly and smartly")
+# --- Получаем актуальные цены акций ---
+def get_stock_prices(tickers):
+    data = yf.download(tickers, period="1d", progress=False)
+    prices = {}
+    for ticker in tickers:
+        try:
+            prices[ticker] = data['Close'][-1]
+        except Exception:
+            prices[ticker] = None
+    return prices
 
-# Показываем портфель
-st.markdown("### 📈 Your Portfolio")
-total_portfolio_value = 0
-for stock, shares in st.session_state.user_holdings.items():
-    price = stock_prices[stock]
-    value = shares * price
-    total_portfolio_value += value
-    st.write(f"**{stock}**: {shares:.4f} shares × ${price} = **${value:.2f}**")
+tickers = list(st.session_state.portfolio.keys())
+prices = get_stock_prices(tickers)
 
-st.markdown(f"**Total portfolio value: ${total_portfolio_value:.2f}**")
+# --- Отображение портфеля с актуальными ценами ---
+st.header("Your Portfolio")
+total_value = 0
+for stock, shares in st.session_state.portfolio.items():
+    price = prices.get(stock)
+    if price:
+        value = shares * price
+        total_value += value
+        st.write(f"{stock}: {shares} shares × ${price:.2f} = **${value:.2f}**")
+    else:
+        st.write(f"{stock}: {shares} shares × Price unavailable")
+
+st.write(f"**Total portfolio value: ${total_value:.2f}**")
 st.markdown("---")
 
-# Сумма к оплате
-amount_due = st.number_input("Enter amount to pay ($):", min_value=1.0, step=0.01)
+# --- Ввод суммы для оплаты ---
+amount_due = st.number_input("Enter the amount to pay ($):", min_value=0.01, step=0.01, format="%.2f")
 
-# Оплата несколькими акциями
-st.markdown("### Select stocks to pay with (partial payments allowed)")
+# --- Выбор режима оплаты ---
+mode = st.radio("Choose payment mode:", ["AI selects stocks", "I select stocks"])
 
-payment_stocks = {}
-remaining_due = amount_due
+# --- Оплата AI ---
+if mode == "AI selects stocks":
+    st.subheader("AI Payment Mode")
+    remaining = amount_due
+    payment = {}
 
-for stock, shares in st.session_state.user_holdings.items():
-    price = stock_prices[stock]
-    max_value = shares * price
+    # Сортируем акции по цене за акцию по убыванию
+    sorted_stocks = sorted(prices.items(), key=lambda x: x[1] if x[1] else 0, reverse=True)
 
-    st.write(f"{stock}: {shares:.4f} shares available (${max_value:.2f})")
+    for stock, price in sorted_stocks:
+        if price is None:
+            continue
+        shares_available = st.session_state.portfolio.get(stock, 0)
+        max_value = shares_available * price
+        if max_value <= 0:
+            continue
+        if max_value >= remaining:
+            shares_needed = remaining / price
+            payment[stock] = shares_needed
+            remaining = 0
+            break
+        else:
+            payment[stock] = shares_available
+            remaining -= max_value
 
-    max_spend = min(max_value, remaining_due)
-    if max_spend > 0:
-        spend = st.number_input(f"How much $ to spend from {stock} (max ${max_spend:.2f}):", 
-                                min_value=0.0, max_value=max_spend, step=0.01, key=stock)
+    if remaining > 0:
+        st.error(f"Not enough stocks to cover ${amount_due:.2f}. Short by ${remaining:.2f}.")
+    else:
+        st.write("AI suggests selling:")
+        for stock, shares in payment.items():
+            st.write(f"- {shares:.4f} shares of {stock} (${prices[stock]:.2f} each)")
+
+        if st.button("Pay with AI-selected stocks"):
+            # Обновляем портфель и добавляем транзакцию
+            for stock, shares in payment.items():
+                st.session_state.portfolio[stock] -= shares
+            st.session_state.transactions.append({
+                "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "type": "AI",
+                "details": payment,
+                "amount": amount_due
+            })
+            st.success("Payment successful! 🎉")
+            st.balloons()
+
+# --- Ручной режим оплаты ---
+else:
+    st.subheader("Manual Payment Mode")
+    remaining_due = amount_due
+    user_payment = {}
+    for stock, shares_available in st.session_state.portfolio.items():
+        price = prices.get(stock)
+        if price is None:
+            st.write(f"{stock}: price unavailable")
+            continue
+
+        max_value = shares_available * price
+        st.write(f"{stock}: {shares_available} shares available (${max_value:.2f})")
+        max_spend = min(max_value, remaining_due)
+        spend = st.number_input(f"How much $ to spend from {stock} (max ${max_spend:.2f}):",
+                                min_value=0.0, max_value=max_spend, step=0.01, format="%.2f", key=stock)
+
         if spend > 0:
             shares_to_sell = spend / price
-            payment_stocks[stock] = (shares_to_sell, spend)
+            user_payment[stock] = shares_to_sell
             remaining_due -= spend
             remaining_due = round(remaining_due, 2)
 
-if remaining_due > 0:
-    st.warning(f"⚠️ You still need to cover ${remaining_due:.2f}. Please adjust payments.")
-else:
-    if st.button("Confirm Payment"):
-        # Проверяем, что у пользователя хватает акций
-        enough_shares = True
-        for stock, (shares_to_sell, spend) in payment_stocks.items():
-            if shares_to_sell > st.session_state.user_holdings[stock]:
-                enough_shares = False
-                st.error(f"Not enough shares of {stock} to cover ${spend:.2f}")
-        if enough_shares:
-            # Списываем акции
-            for stock, (shares_to_sell, spend) in payment_stocks.items():
-                st.session_state.user_holdings[stock] -= shares_to_sell
+    if remaining_due > 0:
+        st.warning(f"⚠️ You still need to cover ${remaining_due:.2f}. Please adjust payments.")
+    else:
+        if st.button("Confirm Payment"):
+            # Проверяем хватает ли акций
+            valid = True
+            for stock, shares in user_payment.items():
+                if shares > st.session_state.portfolio.get(stock, 0):
+                    st.error(f"Not enough shares of {stock}.")
+                    valid = False
+            if valid:
+                for stock, shares in user_payment.items():
+                    st.session_state.portfolio[stock] -= shares
                 st.session_state.transactions.append({
-                    "stock": stock,
-                    "shares": shares_to_sell,
-                    "value": spend,
                     "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "type": "Manual",
+                    "details": user_payment,
+                    "amount": amount_due
                 })
-            st.success("✅ Payment successful! All stocks updated.")
-            st.balloons()
+                st.success("Payment successful! 🎉")
+                st.balloons()
 
+# --- История транзакций ---
 st.markdown("---")
-st.markdown("### 🧾 Transaction History")
+st.header("Transaction History")
 if st.session_state.transactions:
     for tx in reversed(st.session_state.transactions):
-        st.write(f"{tx['date']}: Sold {tx['shares']:.4f} shares of {tx['stock']} for ${tx['value']:.2f}")
+        tx_details = ", ".join([f"{shares:.4f} shares {stock}" for stock, shares in tx["details"].items()])
+        st.write(f"{tx['date']} — {tx['type']} payment — ${tx['amount']:.2f} using {tx_details}")
 else:
     st.write("No transactions yet.")
