@@ -27,55 +27,20 @@ prices = {
 }
 
 def get_portfolio_value(portfolio, prices):
-    return sum(shares * prices.get(stock, 0) for stock, shares in portfolio.items())
+    total = 0
+    for stock, shares in portfolio.items():
+        price = prices.get(stock, 0)
+        total += shares * price
+    return total
 
 def clean_portfolio(portfolio):
-    to_delete = [stock for stock, shares in portfolio.items() if shares <= 0]
-    for stock in to_delete:
+    # Remove stocks with 0 or less shares
+    to_del = [stock for stock, shares in portfolio.items() if shares <= 0]
+    for stock in to_del:
         del portfolio[stock]
 
-def show_success_checkmark():
-    st.markdown(
-        """
-        <style>
-        .checkmark-screen {
-            position: fixed;
-            top: 0; left: 0; width: 100vw; height: 100vh;
-            background-color: white;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 9999;
-            user-select: none;
-        }
-        .checkmark {
-            width: 150px;
-            height: 150px;
-            border-radius: 50%;
-            border: 12px solid #4BB543;
-            position: relative;
-        }
-        .checkmark:after {
-            content: '';
-            position: absolute;
-            left: 40px;
-            top: 65px;
-            width: 35px;
-            height: 70px;
-            border-right: 12px solid #4BB543;
-            border-bottom: 12px solid #4BB543;
-            transform: rotate(45deg);
-            transform-origin: left top;
-        }
-        </style>
-        <div class="checkmark-screen">
-            <div class="checkmark"></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
 st.header("Your Portfolio")
+
 data = []
 for stock, shares in st.session_state.portfolio.items():
     price = prices.get(stock, 0)
@@ -92,19 +57,20 @@ st.markdown("---")
 
 amount_due = st.number_input("Enter amount to pay (USD):", min_value=0.01, step=0.01, format="%.2f")
 
-payment_mode = st.radio("Select payment mode:", ["AI selects stocks", "I select stocks"])
-
-payment_done = False
+mode = st.radio("Select payment mode:", ["AI selects stocks", "I select stocks"])
 
 def pay_with_ai(amount, portfolio, prices):
     remaining = amount
     payment = {}
+    # Use stocks with highest price first to cover amount
     sorted_stocks = sorted(prices.items(), key=lambda x: x[1], reverse=True)
+
     for stock, price in sorted_stocks:
         shares_available = portfolio.get(stock, 0)
         max_value = shares_available * price
         if max_value <= 0:
             continue
+
         if max_value >= remaining:
             shares_needed = remaining / price
             payment[stock] = shares_needed
@@ -113,22 +79,26 @@ def pay_with_ai(amount, portfolio, prices):
         else:
             payment[stock] = shares_available
             remaining -= max_value
+
     if remaining > 0:
         return None, remaining
     return payment, 0
 
-def pay_manually(amount, portfolio, prices):
+def manual_payment(amount, portfolio, prices):
     st.subheader("Manual Payment Mode")
     remaining_due = amount
     user_payment = {}
+
     for stock, shares_available in portfolio.items():
         price = prices.get(stock)
         if price is None:
             st.write(f"{stock}: price unavailable")
             continue
+
         max_value = shares_available * price
         st.write(f"{stock}: {shares_available:.4f} shares available (${max_value:.2f})")
         max_spend = min(max_value, remaining_due)
+
         spend = st.number_input(
             f"Amount to pay from {stock} (max ${max_spend:.2f}):",
             min_value=0.0,
@@ -137,67 +107,80 @@ def pay_manually(amount, portfolio, prices):
             format="%.2f",
             key=f"manual_{stock}"
         )
+
         user_payment[stock] = spend
         remaining_due -= spend
+
     if remaining_due > 0:
         st.warning(f"You still need to cover ${remaining_due:.2f}. Please adjust the amounts.")
         return None
     else:
         if st.button("Confirm manual payment"):
-            # Validate shares
             for stock, spend in user_payment.items():
                 price = prices[stock]
                 shares_needed = spend / price if price else 0
                 if shares_needed > portfolio.get(stock, 0):
                     st.error(f"Not enough shares of {stock} to cover ${spend:.2f}.")
                     return None
-            # Deduct shares and record transactions
+
             for stock, spend in user_payment.items():
                 shares_to_deduct = spend / prices[stock]
                 portfolio[stock] -= shares_to_deduct
+                # Add to transaction history
                 st.session_state.transactions.append({
                     "Stock": stock,
                     "Shares": shares_to_deduct,
                     "Amount": spend,
                     "Mode": "Manual"
                 })
+
             clean_portfolio(portfolio)
             st.success("Manual payment successful!")
-            return True
+            return user_payment
+
     return None
 
-if st.button("Pay"):
-    if amount_due > total_value:
-        st.error("Insufficient portfolio value to cover payment.")
-    else:
-        if payment_mode == "AI selects stocks":
+def show_transaction_message():
+    st.markdown(
+        """
+        <div style="position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+                    background-color: #4BB543; color: white; padding: 15px 30px; border-radius: 10px;
+                    font-size: 20px; z-index: 9999;">
+            Transaction successful!
+        </div>
+        """, unsafe_allow_html=True)
+    time.sleep(1)
+
+# Payment process
+if amount_due > 0:
+    if mode == "AI selects stocks":
+        if st.button("Pay with AI"):
             payment, remaining = pay_with_ai(amount_due, st.session_state.portfolio, prices)
             if payment is None:
-                st.error(f"Cannot cover the amount with your stocks. ${remaining:.2f} short.")
+                st.error(f"Not enough shares to cover ${amount_due:.2f}.")
             else:
-                for stock, shares_used in payment.items():
-                    st.session_state.portfolio[stock] -= shares_used
+                for stock, shares_to_deduct in payment.items():
+                    st.session_state.portfolio[stock] -= shares_to_deduct
                     st.session_state.transactions.append({
                         "Stock": stock,
-                        "Shares": shares_used,
-                        "Amount": shares_used * prices[stock],
+                        "Shares": shares_to_deduct,
+                        "Amount": shares_to_deduct * prices[stock],
                         "Mode": "AI"
                     })
                 clean_portfolio(st.session_state.portfolio)
-                payment_done = True
-        else:
-            result = pay_manually(amount_due, st.session_state.portfolio, prices)
-            if result:
-                payment_done = True
+                show_transaction_message()
+                st.experimental_rerun()
 
-if payment_done:
-    show_success_checkmark()
-    time.sleep(3)
-    st.experimental_rerun()
+    else:
+        manual_payment(amount_due, st.session_state.portfolio, prices)
 
-st.markdown("### Transaction History")
+# Transaction History
+st.markdown("---")
+st.header("Transaction History")
 if st.session_state.transactions:
-    tx_df = pd.DataFrame(st.session_state.transactions)
-    st.table(tx_df)
+    df_trans = pd.DataFrame(st.session_state.transactions)
+    df_trans["Shares"] = df_trans["Shares"].map("{:.4f}".format)
+    df_trans["Amount"] = df_trans["Amount"].map("${:.2f}".format)
+    st.table(df_trans)
 else:
     st.write("No transactions yet.")
