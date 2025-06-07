@@ -13,6 +13,10 @@ if "portfolio" not in st.session_state:
         "AMZN": 3,
     }
 
+# --- Initialize transaction history ---
+if "transactions" not in st.session_state:
+    st.session_state.transactions = []
+
 # --- Fake prices for demo ---
 prices = {
     "AAPL": 170.25,
@@ -21,7 +25,6 @@ prices = {
     "AMZN": 140.50,
 }
 
-# --- Calculate total portfolio value ---
 def get_portfolio_value(portfolio, prices):
     total = 0
     for stock, shares in portfolio.items():
@@ -29,7 +32,12 @@ def get_portfolio_value(portfolio, prices):
         total += shares * price
     return total
 
-# --- Display portfolio in a professional table ---
+def clean_portfolio(portfolio):
+    # Удаляем акции с 0 и меньше акций
+    to_del = [stock for stock, shares in portfolio.items() if shares <= 0]
+    for stock in to_del:
+        del portfolio[stock]
+
 st.header("Your Portfolio")
 
 data = []
@@ -46,17 +54,14 @@ st.markdown(f"**Total Portfolio Value: ${total_value:.2f}**")
 
 st.markdown("---")
 
-# --- Input amount to pay ---
 amount_due = st.number_input("Enter amount to pay (USD):", min_value=0.01, step=0.01, format="%.2f")
 
-# --- Select payment mode ---
 mode = st.radio("Select payment mode:", ["AI selects stocks", "I select stocks"])
 
-# --- AI payment calculation ---
 def pay_with_ai(amount, portfolio, prices):
     remaining = amount
     payment = {}
-    # Sort stocks by price descending to use most valuable shares first
+    # Используем акции с самой высокой ценой, чтобы покрыть сумму
     sorted_stocks = sorted(prices.items(), key=lambda x: x[1], reverse=True)
 
     for stock, price in sorted_stocks:
@@ -78,7 +83,6 @@ def pay_with_ai(amount, portfolio, prices):
         return None, remaining
     return payment, 0
 
-# --- Manual payment ---
 def pay_manually(amount, portfolio, prices):
     st.subheader("Manual Payment Mode")
     remaining_due = amount
@@ -121,13 +125,61 @@ def pay_manually(amount, portfolio, prices):
             for stock, spend in user_payment.items():
                 shares_to_deduct = spend / prices[stock]
                 portfolio[stock] -= shares_to_deduct
+                # Добавляем в историю
+                st.session_state.transactions.append({
+                    "Stock": stock,
+                    "Shares": shares_to_deduct,
+                    "Amount": spend,
+                    "Mode": "Manual"
+                })
 
+            clean_portfolio(portfolio)
             st.success("Manual payment successful!")
             return user_payment
 
     return None
 
-# --- Payment logic ---
+def show_success_checkmark():
+    # Показываем белую галочку на весь экран
+    checkmark_style = """
+    <style>
+    .checkmark-screen {
+        position: fixed;
+        top:0; left:0; width: 100vw; height: 100vh;
+        background-color: white;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 9999;
+    }
+    .checkmark {
+        width: 150px;
+        height: 150px;
+        border-radius: 50%;
+        border: 10px solid #4BB543;
+        position: relative;
+    }
+    .checkmark:after {
+        content: '';
+        position: absolute;
+        left: 40px;
+        top: 70px;
+        width: 35px;
+        height: 70px;
+        border-right: 10px solid #4BB543;
+        border-bottom: 10px solid #4BB543;
+        transform: rotate(45deg);
+        transform-origin: left top;
+    }
+    </style>
+    <div class="checkmark-screen">
+      <div class="checkmark"></div>
+    </div>
+    """
+    st.markdown(checkmark_style, unsafe_allow_html=True)
+
+payment_done = False
+
 if mode == "AI selects stocks":
     st.subheader("AI Payment Mode")
     payment, shortage = pay_with_ai(amount_due, st.session_state.portfolio, prices)
@@ -138,10 +190,41 @@ if mode == "AI selects stocks":
         for stock, shares in payment.items():
             st.write(f"- {shares:.4f} shares of {stock} at ${prices[stock]:.2f} per share")
         if st.button("Confirm AI payment"):
-            # Deduct shares from portfolio
             for stock, shares in payment.items():
                 st.session_state.portfolio[stock] -= shares
+                st.session_state.transactions.append({
+                    "Stock": stock,
+                    "Shares": shares,
+                    "Amount": shares * prices[stock],
+                    "Mode": "AI"
+                })
+            clean_portfolio(st.session_state.portfolio)
             st.success("AI payment successful!")
+            payment_done = True
 
 elif mode == "I select stocks":
-    pay_manually(amount_due, st.session_state.portfolio, prices)
+    manual_payment = pay_manually(amount_due, st.session_state.portfolio, prices)
+    if manual_payment is not None:
+        payment_done = True
+
+st.markdown("---")
+
+# --- Show transaction history ---
+st.header("Transaction History")
+if st.session_state.transactions:
+    tx_data = []
+    for tx in st.session_state.transactions:
+        tx_data.append([
+            tx["Stock"],
+            f"{tx['Shares']:.4f}",
+            f"${tx['Amount']:.2f}",
+            tx["Mode"]
+        ])
+    tx_df = pd.DataFrame(tx_data, columns=["Stock", "Shares Sold", "Amount (USD)", "Payment Mode"])
+    st.table(tx_df)
+else:
+    st.write("No transactions yet.")
+
+# --- Show white checkmark fullscreen on payment success ---
+if payment_done:
+    show_success_checkmark()
