@@ -34,7 +34,6 @@ def get_portfolio_value(portfolio, prices):
     return total
 
 def clean_portfolio(portfolio):
-    # Remove stocks with 0 or less shares
     to_del = [stock for stock, shares in portfolio.items() if shares <= 0]
     for stock in to_del:
         del portfolio[stock]
@@ -62,7 +61,6 @@ mode = st.radio("Select payment mode:", ["AI selects stocks", "I select stocks"]
 def pay_with_ai(amount, portfolio, prices):
     remaining = amount
     payment = {}
-    # Use stocks with highest price first to cover amount
     sorted_stocks = sorted(prices.items(), key=lambda x: x[1], reverse=True)
 
     for stock, price in sorted_stocks:
@@ -126,7 +124,6 @@ def manual_payment(amount, portfolio, prices):
             for stock, spend in user_payment.items():
                 shares_to_deduct = spend / prices[stock]
                 portfolio[stock] -= shares_to_deduct
-                # Add to transaction history
                 st.session_state.transactions.append({
                     "Stock": stock,
                     "Shares": shares_to_deduct,
@@ -135,29 +132,42 @@ def manual_payment(amount, portfolio, prices):
                 })
 
             clean_portfolio(portfolio)
-            st.success("Manual payment successful!")
+            show_transaction_message()
             return user_payment
 
     return None
 
 def show_transaction_message():
+    # White text on transparent background, centered, displayed for 1 second
     st.markdown(
         """
-        <div style="position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
-                    background-color: #4BB543; color: white; padding: 15px 30px; border-radius: 10px;
-                    font-size: 20px; z-index: 9999;">
+        <div style="
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 32px;
+            color: black;
+            background-color: rgba(255, 255, 255, 0.8);
+            padding: 20px 40px;
+            border-radius: 15px;
+            z-index: 9999;
+            text-align: center;
+            ">
             Transaction successful!
         </div>
-        """, unsafe_allow_html=True)
+        """,
+        unsafe_allow_html=True
+    )
     time.sleep(1)
+    # After sleep Streamlit reruns and message disappears
 
-# Payment process
 if amount_due > 0:
     if mode == "AI selects stocks":
         if st.button("Pay with AI"):
             payment, remaining = pay_with_ai(amount_due, st.session_state.portfolio, prices)
             if payment is None:
-                st.error(f"Not enough shares to cover ${amount_due:.2f}.")
+                st.error(f"Insufficient shares to cover the amount. Short by ${remaining:.2f}.")
             else:
                 for stock, shares_to_deduct in payment.items():
                     st.session_state.portfolio[stock] -= shares_to_deduct
@@ -169,18 +179,23 @@ if amount_due > 0:
                     })
                 clean_portfolio(st.session_state.portfolio)
                 show_transaction_message()
-                st.experimental_rerun()
 
     else:
         manual_payment(amount_due, st.session_state.portfolio, prices)
 
-# Transaction History
 st.markdown("---")
+
 st.header("Transaction History")
 if st.session_state.transactions:
-    df_trans = pd.DataFrame(st.session_state.transactions)
-    df_trans["Shares"] = df_trans["Shares"].map("{:.4f}".format)
-    df_trans["Amount"] = df_trans["Amount"].map("${:.2f}".format)
-    st.table(df_trans)
+    tx_data = []
+    for tx in st.session_state.transactions:
+        tx_data.append([
+            tx["Stock"],
+            f"{tx['Shares']:.4f}",
+            f"${tx['Amount']:.2f}",
+            tx["Mode"]
+        ])
+    tx_df = pd.DataFrame(tx_data, columns=["Stock", "Shares Used", "Amount Paid", "Payment Mode"])
+    st.table(tx_df)
 else:
     st.write("No transactions yet.")
