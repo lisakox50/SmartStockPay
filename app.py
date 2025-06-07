@@ -1,4 +1,6 @@
+pip install yfinance streamlit
 import streamlit as st
+import yfinance as yf
 import datetime
 
 st.set_page_config(page_title="SmartStockPay", page_icon="💸")
